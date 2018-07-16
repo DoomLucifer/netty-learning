@@ -27,14 +27,14 @@
                             <goal>java</goal>
                         </goals>
                     </execution>
-                    <!--<configuration>-->
-                        <!--<mainClass>com.kyubi.netty.EchoClient</mainClass>-->
-                        <!--<arguments>-->
-                            <!--<argument>${echo-server.hostname}</argument>-->
-                            <!--<argument>${echo-server.port}</argument>-->
-                        <!--</arguments>-->
-                    <!--</configuration>-->
                 </executions>
+                <configuration>
+                    <mainClass>com.kyubi.netty.EchoClient</mainClass>
+                    <arguments>
+                        <argument>${echo-server.hostname}</argument>
+                        <argument>${echo-server.port}</argument>
+                    </arguments>
+                </configuration>
             </plugin>
         </plugins>
     </build>
