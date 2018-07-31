@@ -7,6 +7,7 @@
     <modules>
         <module>echoclient</module>
         <module>echoserver</module>
+        <module>nio</module>
     </modules>
     <packaging>pom</packaging>
     <name>netty-learning</name>
