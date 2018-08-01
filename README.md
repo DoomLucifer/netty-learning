@@ -48,7 +48,60 @@
 
 - Buffer的capacity，position，limit
 
+![Buffer的写模式与读模式](https://github.com/garaiya/netty-learning/blob/8fc87b3af0fa43be732eb19aa70ec4d4e2acc450/images/buffers-modes.png?raw=true)
 
+> capacity：Buffer缓冲区的容量
+>
+> position：写模式下表示下一个可插入数据的位置，读模式下表示下一个可读取数据的位置。
+>
+> 详细流程：当写数据到Buffer中时，position表示当前的位置。初始的position值为0，当一个byte、long、char等数据写到Buffer后，position会向前移动到下一个可插入数据的Buffer单元。position的最大值capacity-1；当将Buffer从写模式切换到读模式，position会被重置为0。当从Buffer的position处读取数据时，position向前移动到下一个可读取的位置。
+>
+> limit：写模式下，Buffer的limit表示最多能写多少数据。写模式下limit等于Buffer的capacity。读模式下，limit表示最多能读多少数据，因此当切换到读模式时，limit会被设置成写模式下的position值。也就是说，能读到之前写入的所有数据。
 
-![Buffer的写模式与读模式](D:\IdeaProjects\garaiya\netty-learning\images\buffers-modes.png)
+- Buffer的类型
+
+1. ByteBuffer
+2. CharBuffer
+3. IntBuffer
+4. ShortBuffer
+5. LongBuffer
+6. FloatBuffer
+7. DoubleBuffer
+8. MappedByteBuffer
+
+- Buffer的分配
+
+```java
+//分配一个48字节容量大小的缓冲区
+ByteBuffer buf = ByteBuffer.allocate(48);
+//分配一个1024个字符大小的缓冲区
+CharBuffer buf = CharBuffer.allocate(1024);
+```
+
+- 向Buffer中写数据
+
+1. 从Channel写到Buffer
+2. 通过Buffer的put（）方法写到Buffer里
+
+```java
+//Channel读取数据到Buffer
+int bytesRead = inChannel.read(buf);
+//通过put方法写Buffer
+buf.put(127);
+```
+
+- 从Buffer中读取数据
+
+1. 从Buffer读取数据到Channel
+2. 使用get（）方法从Buffer中读取数据
+
+```java
+//Buffer读取数据到Channel
+int bytesWritten = inChannel.write(buf);
+//get方法读取数据
+byte aByte = buf.get();
+```
+
+- rewind（）方法
+- clear（）与compact（）方法
 
