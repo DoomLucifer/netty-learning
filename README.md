@@ -33,3 +33,22 @@
 3. SocketChannel 通过TCP读写网络中的数据
 4. ServerSocketChannel 监听新进来的TCP连接，像WEB服务一样，对每一个新进来的连接都会创建一个SocketChannel。
 
+### Buffer
+
+> 缓冲区本质上就是一块可以写入数据，然后可以从中读取数据的内存。这块内存被包装成NIO Buffer对象，并提供了一组方法，用来访问这块内存
+
+- Buffer的基本用法
+
+1. 写入数据到Buffer
+2. 调用flip（）方法
+3. 从Buffer中读取数据
+4. 调用clear（）方法或者compact（）方法
+
+> flip()方法将Buffer从写模式切换到读模式
+
+- Buffer的capacity，position，limit
+
+
+
+![Buffer的写模式与读模式](D:\IdeaProjects\garaiya\netty-learning\images\buffers-modes.png)
+
