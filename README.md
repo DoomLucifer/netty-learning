@@ -103,5 +103,93 @@ byte aByte = buf.get();
 ```
 
 - rewind（）方法
+
+> 将position设回0，所以你可以重读Buffer中的所有数据。limit保持不变，仍然表示能从Buffer中读取多少个元素（byte、char等） 
+
 - clear（）与compact（）方法
+
+> clear()方法：position将被设回0，limit被设置成 capacity的值。换句话说，Buffer 被清空了。Buffer中的数据并未清除，只是这些标记告诉我们可以从哪里开始往Buffer里写数据 。如果Buffer中有一些未读的数据，调用clear()方法，数据将“被遗忘”，意味着不再有任何标记会告诉你哪些数据被读过，哪些还没有 。如果Buffer中仍有未读的数据，且后续还需要这些数据，但是此时想要先先写些数据，那么使用compact()方法。 
+>
+> compact()方法：将所有未读的数据拷贝到Buffer起始处。然后将position设到最后一个未读元素正后面。limit属性依然像clear()方法一样，设置成capacity。现在Buffer准备好写数据了，但是不会覆盖未读的数据 
+
+- mark（）与reset（）方法
+
+> 通过调用Buffer.mark()方法，可以标记Buffer中的一个特定position。之后可以通过调用Buffer.reset()方法恢复到这个position 
+
+- equals（）与compartTo（）方法
+
+### Scatter/Gather
+
+> scatter/gather用于描述从Channel中读取或者写入到Channel的操作
+
+- 分散（scatter）
+
+> Channel将从Channel中读取的数据分散到多个Buffer中去
+
+- 聚集（gather）
+
+> Channel将多个Buffer中的数据聚集到Channel中，也就是写入到Channel
+
+**scatter / gather经常用于需要将传输的数据分开处理的场合，例如传输一个由消息头和消息体组成的消息，你可能会将消息体和消息头分散到不同的buffer中，这样你可以方便的处理消息头和消息体。 **
+
+- 分散读（Scattering Reads）
+
+```java
+ByteBuffer header = ByteBuffer.allocate(128);
+ByteBuffer body = ByteBuffer.allocate(1024);
+ByteBuffer[] bufferArray = {header,body};
+channel.read(bufferArray);
+//注意：buffer首先被插入到数组，然后再将数组作为channel.read() 的输入参数。read()方法按照buffer在数组中的顺序将从channel中读取的数据写入到buffer，当一个buffer被写满后，channel紧接着向另一个buffer中写。
+//Scattering Reads在移动下一个buffer前，必须填满当前的buffer，这也意味着它不适用于动态消息(译者注：消息大小不固定)。换句话说，如果存在消息头和消息体，消息头必须完成填充（例如 128byte），Scattering Reads才能正常工作。
+```
+
+- 聚集写（Gathering Writes）
+
+```java
+ByteBuffer header = ByteBuffer.allocate(128);
+ByteBuffer body = ByteBuffer.allocate(1024);
+ByteBuffer[] bufferArray = {header,body};
+channel.write(bufferArray);
+//buffers数组是write()方法的入参，write()方法会按照buffer在数组中的顺序，将数据写入到channel，注意只有position和limit之间的数据才会被写入。因此，如果一个buffer的容量为128byte，但是仅仅包含58byte的数据，那么这58byte的数据将被写入到channel中。因此与Scattering Reads相反，Gathering Writes能较好的处理动态消息。
+```
+
+### 通道之间传输（Channel to Channel Transfers）
+
+- transferFrom
+
+> FileChannel.transferFrom()方法可以将数据从源通道传输到FileChannel中 
+
+```java
+RandomAccessFile fromFile = new RandomAccessFile("fromFile.txt","rw");
+FileChannel fromChannel = fromFile.getChannel();
+
+RandomAccessFile toFile = new RandomAccessFile("toFile.txt","rw");
+FileChannel toChannel = toFile.getChannel();
+
+long position = 0;
+long count = fromChannel.size();
+
+toChannel.transferFrom(position,count,fromChannel);
+//方法的输入参数position表示从position处开始向目标文件写入数据，count表示最多传输的字节数。如果源通道的剩余空间小于 count 个字节，则所传输的字节数要小于请求的字节数。
+//此外要注意，在SoketChannel的实现中，SocketChannel只会传输此刻准备好的数据（可能不足count字节）。因此，SocketChannel可能不会将请求的所有数据(count个字节)全部传输到FileChannel中。
+```
+
+- transferTo
+
+> transferTo方法将数据从FileChannel传输到其他的Channel中去
+
+```java
+RandomAccessFile fromFile = new RandomAccessFile("fromFile.txt", "rw");
+FileChannel      fromChannel = fromFile.getChannel();
+ 
+RandomAccessFile toFile = new RandomAccessFile("toFile.txt", "rw");
+FileChannel      toChannel = toFile.getChannel();
+
+long position = 0;
+long count = fromChannel.size();
+ 
+fromChannel.transferTo(position, count, toChannel);
+```
+
+### Selector
 
