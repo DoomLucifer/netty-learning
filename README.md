@@ -193,3 +193,72 @@ fromChannel.transferTo(position, count, toChannel);
 
 ### Selector
 
+> Selector是一个能够监听多个NIO通道的NIO组件，它知道哪个通道已经准备好了读或者写的事件。单线程的Selector可以管理多个通道，从而管理多个网络连接。
+
+- Why User a Selector？
+
+> 为什么使用Selector？Selector单线程监听多个通道的好处是使用更少的线程，更少的线程带来的直接的好处就是减少线程上下文的切换，而线程的切换对于操作系统来说是一笔昂贵的开销，并且每个线程也会占用一定的内存资源，因此使用的线程越少越好。
+
+单线程Selector管理3个通道插图
+
+- Creating a Selector
+
+```java
+Selector selector = Selector.open();
+```
+
+- Registering Channels With the Selector
+
+```java
+channel.configureBlocking(false);
+SelectionKey key = channel.register(selector,SelectionKey.OP_READ);
+```
+
+register()方法的第二个参数表示Selector要监听通道的哪个事件，总共包括以下四个事件：
+
+1. Connect
+2. Accept
+3. Read
+4. Write
+
+一个通道已经成功连接到服务器表示"connect ready"；一个ServerSocketChannel接受了incoming connection表示"accept ready"；
+
+这四个事件由这四个常量key表示：
+
+1. SelectionKey.OP_CONNECT 
+2. SelectionKey.OP_ACCEPT
+3. SelectionKey.OP_READ
+4. SelectionKey.OP_WRITE
+
+```java
+//监听多个事件
+int interestSet = SelectionKey.OP_READ | SelectionKey.OP_WRITE;    
+```
+
+- ## SelectionKey's
+
+SelectionKey包含以下几个属性：
+
+1. The interest set
+2. The ready set
+3. The Channel
+4. The Selector
+5. An attached object (optional)
+
+- interest集合
+
+> interest集合是你所选择的的感兴趣的事件集合。可以通过SelectionKey读写interest集合：
+
+```java
+int interestSet = selectionKey.interestOps();
+
+boolean isInterestedInAccept  = (interestSet & SelectionKey.OP_ACCEPT) == SelectionKey.OP_ACCEPT；
+boolean isInterestedInConnect = interestSet & SelectionKey.OP_CONNECT;
+boolean isInterestedInRead    = interestSet & SelectionKey.OP_READ;
+boolean isInterestedInWrite   = interestSet & SelectionKey.OP_WRITE;
+```
+
+可以看到，用“位与”操作interest 集合和给定的SelectionKey常量，可以确定某个确定的事件是否在interest 集合中。 
+
+- ready集合
+
