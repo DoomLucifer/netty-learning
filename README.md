@@ -99,9 +99,58 @@ buf.put(127);
 //Buffer读取数据到Channel
 int bytesWritten = inChannel.write(buf);
 //get方法读取数据
+//get方法有很多版本，允许你以不同的方式从Buffer中读取数据。例如，从指定position读取，或者从Buffer中读取数据到字节数组。更多Buffer实现的细节参考JavaDoc。
 byte aByte = buf.get();
 ```
 
 - rewind（）方法
-- clear（）与compact（）方法
+
+Buffer.rewind()方法重置position为0，所以可以重读buffer中的所有数据。limit保持不变，仍然表示能从Buffer中读多少个元素（byte、char等）
+
+- clear（）and compact（）
+
+一旦读完Buffer中的数据，需要让Buffer准备好再次被写入。可以通过clear()或compact()方法来完成。
+
+> clear()方法：将position设置成0，limit设置成capacity。也就是说Buffer可以再次被写入了，但是之前的数据没有被清空，只是标记被重置。如果还有没读取完的数据，调用clear方法后，这些数据将“被遗忘”，意味着不再有任何标记会告诉你哪些数据被读过，哪些还没读。
+>
+> compact()方法：如果有未读的数据，并且一会在读，但是现在要做写入操作，这是调用该方法来代替clear方法。compact方法将所有未读的数据移动到Buffer的开始处，然后将position设置成未读数据的下一个位置，limit仍然设置成capacity。现在再往Buffer里写入数据将不会覆盖未读的数据。
+
+- mark() and reset()
+
+通过调用Buffer.mark()方法，可以标记Buffer中的一个特定position。之后可以通过调用Buffer.reset()方法恢复到这个position
+
+```java
+buffer.mark();
+//call buffer.get() a couple of times
+buffer.reset(); //set position back to mark
+```
+
+- equals()	and compareTo()
+
+用于比较两个Buffers
+
+**equals()**
+
+满足下列条件时，表示两个Buffer相等：
+
+1. 相同的类型（byte、char、int等）
+2. Buffer中剩余的byte、char等的数量相同
+3. Buffer中剩余的byte、char等是相同的
+
+equals方法只比较Buffer中的剩余元素。
+
+**compareTo()**
+
+compareTo方法比较两个Buffer中的剩余元素，如果满足下列条件，则认为一个Buffer"小于"另一个Buffer：
+
+1. 第一个不相等的元素小于另一个buffer中对应的元素
+2. 所有元素都想等，但第一个Bufer比另一个Buffer先读完（第一个Buffer的元素个数比另一个少）。
+
+### Scatter/Gather
+
+> 用于描述从Channel中读取或者写入到Channel的操作。
+
+分散（scatter）：从Channel中读取数据写入到多个Buffer中。
+
+聚集（gather）：将多个Buffer中的数据写入同一个Channel。
 
