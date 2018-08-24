@@ -104,8 +104,7 @@ byte aByte = buf.get();
 ```
 
 - rewind（）方法
-
-Buffer.rewind()方法重置position为0，所以可以重读buffer中的所有数据。limit保持不变，仍然表示能从Buffer中读多少个元素（byte、char等）
+  Buffer.rewind()方法重置position为0，所以可以重读buffer中的所有数据。limit保持不变，仍然表示能从Buffer中读多少个元素（byte、char等）
 
 - clear（）and compact（）
 
@@ -148,9 +147,145 @@ compareTo方法比较两个Buffer中的剩余元素，如果满足下列条件�
 
 ### Scatter/Gather
 
-> 用于描述从Channel中读取或者写入到Channel的操作。
+> scatter/gather用于描述从Channel中读取或者写入到Channel的操作
 
-分散（scatter）：从Channel中读取数据写入到多个Buffer中。
+- 分散（scatter）
 
-聚集（gather）：将多个Buffer中的数据写入同一个Channel。
+> Channel将从Channel中读取的数据分散到多个Buffer中去
+
+- 聚集（gather）
+
+> Channel将多个Buffer中的数据聚集到Channel中，也就是写入到Channel
+
+**scatter / gather经常用于需要将传输的数据分开处理的场合，例如传输一个由消息头和消息体组成的消息，你可能会将消息体和消息头分散到不同的buffer中，这样你可以方便的处理消息头和消息体。 **
+
+- 分散读（Scattering Reads）
+
+```java
+ByteBuffer header = ByteBuffer.allocate(128);
+ByteBuffer body = ByteBuffer.allocate(1024);
+ByteBuffer[] bufferArray = {header,body};
+channel.read(bufferArray);
+//注意：buffer首先被插入到数组，然后再将数组作为channel.read() 的输入参数。read()方法按照buffer在数组中的顺序将从channel中读取的数据写入到buffer，当一个buffer被写满后，channel紧接着向另一个buffer中写。
+//Scattering Reads在移动下一个buffer前，必须填满当前的buffer，这也意味着它不适用于动态消息(译者注：消息大小不固定)。换句话说，如果存在消息头和消息体，消息头必须完成填充（例如 128byte），Scattering Reads才能正常工作。
+```
+
+- 聚集写（Gathering Writes）
+
+```java
+ByteBuffer header = ByteBuffer.allocate(128);
+ByteBuffer body = ByteBuffer.allocate(1024);
+ByteBuffer[] bufferArray = {header,body};
+channel.write(bufferArray);
+//buffers数组是write()方法的入参，write()方法会按照buffer在数组中的顺序，将数据写入到channel，注意只有position和limit之间的数据才会被写入。因此，如果一个buffer的容量为128byte，但是仅仅包含58byte的数据，那么这58byte的数据将被写入到channel中。因此与Scattering Reads相反，Gathering Writes能较好的处理动态消息。
+```
+
+### 通道之间传输（Channel to Channel Transfers）
+
+- transferFrom
+
+> FileChannel.transferFrom()方法可以将数据从源通道传输到FileChannel中 
+
+```java
+RandomAccessFile fromFile = new RandomAccessFile("fromFile.txt","rw");
+FileChannel fromChannel = fromFile.getChannel();
+
+RandomAccessFile toFile = new RandomAccessFile("toFile.txt","rw");
+FileChannel toChannel = toFile.getChannel();
+
+long position = 0;
+long count = fromChannel.size();
+
+toChannel.transferFrom(position,count,fromChannel);
+//方法的输入参数position表示从position处开始向目标文件写入数据，count表示最多传输的字节数。如果源通道的剩余空间小于 count 个字节，则所传输的字节数要小于请求的字节数。
+//此外要注意，在SoketChannel的实现中，SocketChannel只会传输此刻准备好的数据（可能不足count字节）。因此，SocketChannel可能不会将请求的所有数据(count个字节)全部传输到FileChannel中。
+```
+
+- transferTo
+
+> transferTo方法将数据从FileChannel传输到其他的Channel中去
+
+```java
+RandomAccessFile fromFile = new RandomAccessFile("fromFile.txt", "rw");
+FileChannel      fromChannel = fromFile.getChannel();
+ 
+RandomAccessFile toFile = new RandomAccessFile("toFile.txt", "rw");
+FileChannel      toChannel = toFile.getChannel();
+
+long position = 0;
+long count = fromChannel.size();
+ 
+fromChannel.transferTo(position, count, toChannel);
+```
+
+### Selector
+
+> Selector是一个能够监听多个NIO通道的NIO组件，它知道哪个通道已经准备好了读或者写的事件。单线程的Selector可以管理多个通道，从而管理多个网络连接。
+
+- Why User a Selector？
+
+> 为什么使用Selector？Selector单线程监听多个通道的好处是使用更少的线程，更少的线程带来的直接的好处就是减少线程上下文的切换，而线程的切换对于操作系统来说是一笔昂贵的开销，并且每个线程也会占用一定的内存资源，因此使用的线程越少越好。
+
+单线程Selector管理3个通道插图
+
+- Creating a Selector
+
+```java
+Selector selector = Selector.open();
+```
+
+- Registering Channels With the Selector
+
+```java
+channel.configureBlocking(false);
+SelectionKey key = channel.register(selector,SelectionKey.OP_READ);
+```
+
+register()方法的第二个参数表示Selector要监听通道的哪个事件，总共包括以下四个事件：
+
+1. Connect
+2. Accept
+3. Read
+4. Write
+
+一个通道已经成功连接到服务器表示"connect ready"；一个ServerSocketChannel接受了incoming connection表示"accept ready"；
+
+这四个事件由这四个常量key表示：
+
+1. SelectionKey.OP_CONNECT 
+2. SelectionKey.OP_ACCEPT
+3. SelectionKey.OP_READ
+4. SelectionKey.OP_WRITE
+
+```java
+//监听多个事件
+int interestSet = SelectionKey.OP_READ | SelectionKey.OP_WRITE;    
+```
+
+- ## SelectionKey's
+
+SelectionKey包含以下几个属性：
+
+1. The interest set
+2. The ready set
+3. The Channel
+4. The Selector
+5. An attached object (optional)
+
+- interest集合
+
+> interest集合是你所选择的的感兴趣的事件集合。可以通过SelectionKey读写interest集合：
+
+```java
+int interestSet = selectionKey.interestOps();
+
+boolean isInterestedInAccept  = (interestSet & SelectionKey.OP_ACCEPT) == SelectionKey.OP_ACCEPT；
+boolean isInterestedInConnect = interestSet & SelectionKey.OP_CONNECT;
+boolean isInterestedInRead    = interestSet & SelectionKey.OP_READ;
+boolean isInterestedInWrite   = interestSet & SelectionKey.OP_WRITE;
+```
+
+可以看到，用“位与”操作interest 集合和给定的SelectionKey常量，可以确定某个确定的事件是否在interest 集合中。 
+
+- ready集合
 
