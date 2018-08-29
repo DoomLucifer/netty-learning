@@ -196,7 +196,7 @@ FileChannel toChannel = toFile.getChannel();
 long position = 0;
 long count = fromChannel.size();
 
-toChannel.transferFrom(position,count,fromChannel);
+toChannel.transferFrom(fromChannel,position,count);
 //方法的输入参数position表示从position处开始向目标文件写入数据，count表示最多传输的字节数。如果源通道的剩余空间小于 count 个字节，则所传输的字节数要小于请求的字节数。
 //此外要注意，在SoketChannel的实现中，SocketChannel只会传输此刻准备好的数据（可能不足count字节）。因此，SocketChannel可能不会将请求的所有数据(count个字节)全部传输到FileChannel中。
 ```
@@ -234,12 +234,14 @@ fromChannel.transferTo(position, count, toChannel);
 Selector selector = Selector.open();
 ```
 
-- Registering Channels With the Selector
+- Registering Channels With the Selector（向Selector注册通道）
 
 ```java
 channel.configureBlocking(false);
 SelectionKey key = channel.register(selector,SelectionKey.OP_READ);
 ```
+
+通道必须是非阻塞模式才能与Selector一起使用，这意味着不能使用FileChannel，因为FileChannel无法转换成非阻塞模式。Socket通道是可以的。
 
 register()方法的第二个参数表示Selector要监听通道的哪个事件，总共包括以下四个事件：
 
@@ -248,7 +250,7 @@ register()方法的第二个参数表示Selector要监听通道的哪个事件�
 3. Read
 4. Write
 
-一个通道已经成功连接到服务器表示"connect ready"；一个ServerSocketChannel接受了incoming connection表示"accept ready"；
+通道触发了一个事件意思是该事件已经就绪。一个通道已经成功连接到服务器表示"连接就绪；一个ServerSocketChannel接受了incoming connection表示"接收就绪"；一个有数据可读的通道可以说是"读就绪"；等待写数据的通道可以说是"写就绪"。
 
 这四个事件由这四个常量key表示：
 
@@ -288,4 +290,138 @@ boolean isInterestedInWrite   = interestSet & SelectionKey.OP_WRITE;
 可以看到，用“位与”操作interest 集合和给定的SelectionKey常量，可以确定某个确定的事件是否在interest 集合中。 
 
 - ready集合
+
+ready集合是通道已经准备就绪的操作的集合。在一次选择（Selection）之后，你会首先访问这个ready set。可以这样访问ready集合：
+
+```java
+int readySet = selectionKey.readyOps();0
+```
+
+可以像检测interest集合那样的方法，来检测channel中什么事件或操作已经就绪。也可以使用一下四个方法，它们返回一个布尔类型：
+
+```java
+selectionKey.isAcceptable();
+selectionKey.isConnectable();
+selectionKey.isReadable();
+selectionKey.isWritable();
+```
+
+- Channel + Selector
+
+从SelectionKey访问Channel和Selector很简单。如下：
+
+```java
+Channel channel = selectionKey.channel();
+Selector selector = selectionKey.selector();
+```
+
+- 附件的对象
+
+可以将一个对象或者更多信息附着到SelectionKey上，这样就能方便的识别某个给定的通道。例如，可以附加 与通道一起使用的Buffer，或是包含聚集数据的某个对象。使用方法如下：
+
+```java
+selectionKey.attach(theObject);
+Object attachedObj = selectionKey.attachment();
+```
+
+还可以在用register()方法向Selector注册Channel的时候附加对象。如：
+
+```java
+SelectionKey key = channel.register(selector,SelectionKey.OP_READ,theObject);
+```
+
+- 通过Selector选择通道
+
+一旦向Selector注册了一或多个通道，就可以调用几个重载的select()方法。这些方法返回你所感兴趣的事件（如连接、接受、读或写）已经准备就绪的那些通道。换句话说，如果你对“读就绪”的通道感兴趣，select()方法会返回读事件已经就绪的那些通道。
+
+下面是select()方法：
+
+```java
+int select();
+int select(long timeout);
+int selectNow();
+```
+
+select() 阻塞到至少有一个通道在你注册的事件上就绪了。
+
+select(long timeout)和select()一样，除了最长会阻塞timeout毫秒(参数)。
+
+selectNow()不会阻塞，不管什么通道就绪都立刻返回（译者注：此方法执行非阻塞的选择操作。如果自从前一次选择操作后，没有通道变成可选择的，则此方法直接返回零。）。
+
+select()方法返回的int值表示有多少通道已经就绪。亦即，自上次调用select()方法后有多少通道变成就绪状态。如果调用select()方法，因为有一个通道变成就绪状态，返回了1，若再次调用select()方法，如果另一个通道就绪了，它会再次返回1。如果对第一个就绪的channel没有做任何操作，现在就有两个就绪的通道，但在每次select()方法调用之间，只有一个通道就绪了。
+
+- selectedKeys(）
+
+一旦调用了select()方法，并且返回值表明有一个或更多个通道就绪了，然后可以通过调用selector的selectedKeys()方法，访问“已选择键集（selected key set）”中的就绪通道。如下所示：
+
+```java
+Set selectedKeys = selector.selectedKeys();
+```
+
+当像Selector注册Channel时，Channel.register()方法会返回一个SelectionKey 对象。这个对象代表了注册到该Selector的通道。可以通过SelectionKey的selectedKeySet()方法访问这些对象。
+
+可以遍历这个已选择的键集合来访问就绪的通道。如下：
+
+```java
+Set selectedKeys = selector.selectedKeys();
+Iterator keyIterator = selectedKeys.iterator();
+while(keyIterator.hasNext()){
+    SelectionKey key = keyIterator.next();
+    if(key.isAcceptable()){
+        //a connection was accepted by a ServerSocketChannel.
+    }else if(key.isConnectable()){
+        //a connection was established with a remote server.
+    }else if(key.isReadable()){
+        //a channel is ready for reading
+    }else if(key.isWritable()){
+        //a channel is ready for writing
+    }
+    keyIterator.remove();
+}
+```
+
+这个循环遍历已选择键集中的每个键，并检测各个键所对应的通道的就绪事件。
+
+注意每次迭代末尾的keyIterator.remove()调用。Selector不会自己从已选择键集中移除SelectionKey实例。必须在处理完通道时自己移除。下次该通道变成就绪时，Selector会再次将其放入已选择键集中。
+
+SelectionKey.channel()方法返回的通道需要转型成你要处理的类型，如ServerSocketChannel或SocketChannel等。
+
+- wakeUp()
+
+某个线程调用select()方法后阻塞了，即使没有通道已经就绪，也有办法让其从select()方法返回。只要让其它线程在第一个线程调用select()方法的那个对象上调用Selector.wakeup()方法即可。阻塞在select()方法上的线程会立马返回。
+
+如果有其它线程调用了wakeup()方法，但当前没有线程阻塞在select()方法上，下个调用select()方法的线程会立即“醒来（wake up）”。
+
+- close()
+
+用完Selector后调用其close()方法会关闭该Selector，且使注册到该Selector上的所有SelectionKey实例无效。通道本身并不会关闭。
+
+- 完整的示例
+
+这里有一个完整的示例，打开一个Selector，注册一个通道注册到这个Selector上(通道的初始化过程略去),然后持续监控这个Selector的四种事件（接受，连接，读，写）是否就绪。
+
+```java
+Selector selector = Selector.open();
+channel.configureBlocking(false);
+SelectionKey key = channel.register(selector,SelectionKey.OP_READ);
+while(true){
+    int readyChannels = selector.select();
+    if(readyChannels == 0) continue;
+    Set selectedKeys = selector.selectedKeys();
+    Iterator keyIterator = selectedKeys.iterator();
+    while(keyIterator.hasNext()){
+        SelectionKey key = keyIterator.next();
+        if(key.isAcceptable()){
+            //a connection was accepted by a ServerSocketChannel.
+        }else if(key.isConnectable()){
+            //a connection was established with a remote server.
+        }else if(key.isReadable()){
+            //a channel is ready for reading
+        }else if(key.isWritable()){
+            //a channel is ready for writing
+        }
+        keyIterator.remove();
+    }
+}
+```
 
