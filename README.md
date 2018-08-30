@@ -355,10 +355,10 @@ select()方法返回的int值表示有多少通道已经就绪。亦即，自上
 一旦调用了select()方法，并且返回值表明有一个或更多个通道就绪了，然后可以通过调用selector的selectedKeys()方法，访问“已选择键集（selected key set）”中的就绪通道。如下所示：
 
 ```java
-Set selectedKeys = selector.selectedKeys();
+Set<SelectionKey> selectedKeys = selector.selectedKeys();
 ```
 
-当像Selector注册Channel时，Channel.register()方法会返回一个SelectionKey 对象。这个对象代表了注册到该Selector的通道。可以通过SelectionKey的selectedKeySet()方法访问这些对象。
+当向Selector注册Channel时，Channel.register()方法会返回一个SelectionKey 对象。这个对象代表了注册到该Selector的通道。可以通过SelectionKey的selectedKeySet()方法访问这些对象。
 
 可以遍历这个已选择的键集合来访问就绪的通道。如下：
 
@@ -390,7 +390,7 @@ SelectionKey.channel()方法返回的通道需要转型成你要处理的类型�
 
 某个线程调用select()方法后阻塞了，即使没有通道已经就绪，也有办法让其从select()方法返回。只要让其它线程在第一个线程调用select()方法的那个对象上调用Selector.wakeup()方法即可。阻塞在select()方法上的线程会立马返回。
 
-如果有其它线程调用了wakeup()方法，但当前没有线程阻塞在select()方法上，下个调用select()方法的线程会立即“醒来（wake up）”。
+如果有其它线程调用了wakeup()方法，但当前没有线程阻塞在select()方法上，下个调用select()方法的线程会立即"醒来（wake up）"。
 
 - close()
 
@@ -425,3 +425,158 @@ while(true){
 }
 ```
 
+### FileChannel
+
+> 注：FileChannel不能被设置成非阻塞模式，只能运行在阻塞模式下。
+
+#### Opening a FileChannel
+
+> 使用FileChannel之前必须先打开它，不能直接打开FileChannel。可以通过InputStream、OutputStream、RandomAccessFile获取FileChannel。
+
+```java
+RandomAccessFile aFile = new RandomAccessFile("data/nio-data.txt","rw");
+FileChannel inChannel = aFile.getChannel();
+```
+
+#### Reading Data from a FileChannel
+
+```java
+//首先分配一个Buffer
+ByteBuffer buf = ByteBuffer.allocate(48);
+//从FileChannel读数据到Buffer中，int返回值表示有多少个字节被写入到Buffer中，如果返回值为-1，表示文件被读完(即达到文件末尾)
+int bytesRead = inChannel.read(buf);
+```
+
+#### Writing Data to a FileChannel
+
+```java
+String newData = "New String to write to file..." + System.currentTimeMillis();
+ByteBuffer buf = ByteBuffer.allocate(48);
+buf.clear();
+buf.put(newData.getBytes());
+
+buf.flip();
+
+while(buf.hasRemaining()){
+    channel.write(buf);
+}
+```
+
+#### Closing a FileChannel
+
+```java
+channel.close();
+```
+
+#### FileChannel Position
+
+通过调用position()方法获取FileChannel当前的位置和position(long pos)设置FileChannel的当前位置
+
+```java
+long pos = channel.position();
+channel.position(pos + 123);
+```
+
+如果将位置设置在文件结束符之后，然后试图从文件通道中读取数据，读方法将返回-1 —— 文件结束标志。
+
+如果将位置设置在文件结束符之后，然后向通道中写数据，文件将撑大到当前位置并写入数据。这可能导致“文件空洞”，磁盘上物理文件中写入的数据间有空隙。
+
+#### FileChannel Size
+
+FileChannel实例的size()方法将返回该实例所关联文件的大小
+
+```java
+long fileSize = channel.size();
+```
+
+#### FileChannel Truncate
+
+通过调用FileChannel.truncate()方法截取文件，可以指定长度截取，如：
+
+```java
+//截取文件的前1024个字节
+channel.truncate(1024);
+```
+
+#### FileChannel Force
+
+FileChannel.force()方法将通道中未写入的数据刷新到磁盘。操作系统由于性能的原因会将数据缓存到内存中，所以无法保证写入到通道的数据也被写入了磁盘，除非调用force()方法。
+
+```java
+channel.force(true);
+```
+
+### SocketChannel
+
+Java NIO SocketChannel就是一个连接到TCP网络套接字的通道，有以下两种方式创建SocketChannel：
+
+1. 打开一个SocketChannel并连接到网络上的一台服务器
+2. 当一个连接到达ServerSocketChannel时，将会创建一个SocketChannel
+
+#### Opening a SocketChannel
+
+```java
+SocketChannel socketChannel = SocketChannel.open();
+socketChannel.connect(new InetSocketAddress("http://jenkov.com",80));
+```
+
+#### Closing a SocketChannel
+
+```java
+socketChannel.close();
+```
+
+#### Reading from a SocketChannel
+
+```java
+ByteBuffer buf = ByteBuffer.allocate(48);
+int bytesRead = socketChannel.read(buf);
+```
+
+首先分配一个缓冲区，用来将把从SocketChannel中读出的数据写入到Buffer
+
+然后调用SocketChannel的read()方法，int类型的返回值表示有多少个字节被写入到Buffer，如果返回-1表示已经读到了流的末尾（连接关闭）。
+
+#### Writing to a SocketChannel
+
+```java
+String newData = "New String to write to file..." + System.currentTimeMillis();
+ByteBuffer buf = ByteBuffer.allocate(48);
+buf.clear();
+buf.put(newData.getBytes());
+
+buf.flip();
+
+while(buf.hasRemaining()){
+    channel.write(buf);
+}
+```
+
+#### Non-blocking Mode
+
+可以将SocketChannel设置成非阻塞模式，这样可以在异步模式下调用connect(),read(),write()方法。
+
+- connect()
+
+如果SocketChannel在非阻塞模式下，并且调用connect()方法，方法可能会在连接建立之前返回。判断连接是否建立，需要调用finishConnect()方法，如下：
+
+```java
+socketChannel.configureBlocking(false);
+socketChannel.connect(new InetSocketAddress("http://jenkov.com",80));
+
+while(!socketChannel.finishConnect()){
+    //wait,or do something else...
+}
+```
+
+- write()
+
+非阻塞模式下，write()方法在尚未写出任何内容时可能就返回了。所以需要在循环中调用write()。前面已经有例子了，这里就不赘述了。
+
+- read()
+
+非阻塞模式下,read()方法在尚未读取到任何数据时可能就返回了。所以需要关注它的int返回值，它会告诉你读取了多少字节。
+
+- Non-blocking Mode with Selectors
+
+非阻塞模式与选择器搭配会工作的更好，通过将一或多个SocketChannel注册到Selector，可以询问选择器哪个通道已经准备好了读取，写入等。
