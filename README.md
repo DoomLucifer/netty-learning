@@ -489,7 +489,7 @@ FileChannel实例的size()方法将返回该实例所关联文件的大小
 long fileSize = channel.size();
 ```
 
-#### FileChannel Truncate
+#### FileChannel Truncate（截取）
 
 通过调用FileChannel.truncate()方法截取文件，可以指定长度截取，如：
 
@@ -498,7 +498,7 @@ long fileSize = channel.size();
 channel.truncate(1024);
 ```
 
-#### FileChannel Force
+#### FileChannel Force（强制刷新）
 
 FileChannel.force()方法将通道中未写入的数据刷新到磁盘。操作系统由于性能的原因会将数据缓存到内存中，所以无法保证写入到通道的数据也被写入了磁盘，除非调用force()方法。
 
@@ -526,7 +526,7 @@ socketChannel.connect(new InetSocketAddress("http://jenkov.com",80));
 socketChannel.close();
 ```
 
-#### Reading from a SocketChannel
+#### Reading from a SocketChannel（读数据）
 
 ```java
 ByteBuffer buf = ByteBuffer.allocate(48);
@@ -537,7 +537,7 @@ int bytesRead = socketChannel.read(buf);
 
 然后调用SocketChannel的read()方法，int类型的返回值表示有多少个字节被写入到Buffer，如果返回-1表示已经读到了流的末尾（连接关闭）。
 
-#### Writing to a SocketChannel
+#### Writing to a SocketChannel（写数据）
 
 ```java
 String newData = "New String to write to file..." + System.currentTimeMillis();
@@ -552,7 +552,7 @@ while(buf.hasRemaining()){
 }
 ```
 
-#### Non-blocking Mode
+#### Non-blocking Mode（非阻塞模式）
 
 可以将SocketChannel设置成非阻塞模式，这样可以在异步模式下调用connect(),read(),write()方法。
 
@@ -580,3 +580,122 @@ while(!socketChannel.finishConnect()){
 - Non-blocking Mode with Selectors
 
 非阻塞模式与选择器搭配会工作的更好，通过将一或多个SocketChannel注册到Selector，可以询问选择器哪个通道已经准备好了读取，写入等。
+
+### ServerSocketChannel
+
+Java NIO中的ServerSocketChannel是一个可以监听新进来的TCP连接的通道，类似于标准IO中的ServerSocket一样。
+
+```java
+ServerSocketChannel serverSocketChannel = ServerSocketChannel.open();
+serverSocketChannel.socket().bind(new InetSocketAddress(9999));
+while(true){
+    SocketChannel socketChannel = serverSocketChannel.accept();
+    //do something with socketChannel...
+}
+```
+
+#### Opening a ServerSocketChannel（打开连接）
+
+```java
+ServerSocketChannel serverSocketChannel = ServerSocketChannel.open();
+```
+
+#### Closing a ServerSocketChannel（关闭连接）
+
+```java
+serverSocketChannel.close();
+```
+
+#### Listening for Incoming Connections（监听连接）
+
+通过 ServerSocketChannel.accept() 方法监听新进来的连接。当 accept()方法返回的时候,它返回一个包含新进来的连接的 SocketChannel。因此, accept()方法会一直阻塞到有新连接到达。
+
+#### Non-blocking Mode（非阻塞模式）
+
+ServerSocketChannel可以设置成非阻塞模式。在非阻塞模式下，accept() 方法会立刻返回，如果还没有新进来的连接,返回的将是null。 因此，需要检查返回的SocketChannel是否是null.
+
+```java
+ServerSocketChannel serverSocketChannel = ServerSocketChannel.open();
+serverSocketChannel.socket().bind(new InetSocketAddress(9999));
+serverSocketChannel.configureBlocking(false);
+
+while(true){
+    SocketChannel socketChannel = serverSocketChannel.accept();
+    if(socketChannel != null){
+        //do something with socketChannel...
+    }
+}
+```
+
+### Non-blocking Server（非阻塞服务器）
+
+即使你知道Java NIO 非阻塞的工作特性（如Selector,Channel,Buffer等组件），但是想要设计一个非阻塞的服务器仍然是一件很困难的事。非阻塞式服务器相较于阻塞式来说要多上许多挑战。本文将会讨论非阻塞式服务器的主要几个难题，并针对这些难题给出一些可能的解决方案。
+
+本文的设计思路想法都是基于Java NIO的。但是我相信如果某些语言中也有像Selector之类的组件的话，文中的想法也能用于该语言。据我所知，类似的组件底层操作系统会提供，所以对你来说也可以根据其中的思想运用在其他语言上。
+
+#### Non-blocking Server - Github Repository
+
+[非阻塞服务器概念验证](<https://github.com/jjenkov/java-nio-server>)
+
+#### Non-blocking IO Pipelines
+
+一个非阻塞式IO管道是由各个处理非阻塞式IO组件组成的链。其中包括读/写IO。下图就是一个简单的非阻塞式IO管道组成：
+
+non-blocking-server-1.png
+
+一个组件使用 [**Selector**](http://tutorials.jenkov.com/java-nio/selectors.html) 监控 [**Channel**](http://tutorials.jenkov.com/java-nio/channels.html) 什么时候有可读数据。然后这个组件读取输入并且根据输入生成相应的输出。最后输出将会再次写入到一个Channel中。
+
+一个非阻塞式IO管道不需要将读数据和写数据都包含，有一些管道可能只会读数据，另一些可能只会写数据。
+
+上图仅显示了一个单一的组件。一个非阻塞式IO管道可能拥有超过一个以上的组件去处理输入数据。一个非阻塞式管道的长度是由他的所要完成的任务决定。
+
+一个非阻塞IO管道可能同时读取多个Channel里的数据。举个例子：从多个SocketChannel管道读取数据。
+
+其实上图的控制流程还是太简单了。这里是组件从Selector开始从Channel中读取数据，而不是Channel将数据推送给Selector进入组件中，即便上图画的就是这样。
+
+#### Non-blocking vs Blocking IO Pipelines
+
+非阻塞和阻塞IO管道两者之间最大的区别在于他们如何从底层Channel(Socket或者file)读取数据。
+
+IO管道通常从流中读取数据（来自socket或者file）并且将这些数据拆分为一系列连贯的消息。这和使用tokenizer（这里估计是解析器之类的意思）将数据流解析为token（这里应该是数据包的意思）类似。相反你只是将数据流分解为更大的消息体。我将拆分数据流成消息这一组件称为“消息读取器”（Message Reader）下面是Message Reader拆分流为消息的示意图：non-blocking-server-2.png
+
+一个阻塞IO管道可以使用类似InputStream的接口每次一个字节地从底层Channel读取数据，并且这个接口阻塞直到有数据可以读取。这就是阻塞式Message Reader的实现过程。
+
+使用阻塞式IO接口简化了Message Reader的实现。阻塞式Message Reader从不用处理在流没有数据可读的情况，或者它只读取流中的部分数据并且对于消息的恢复也要延迟处理的情况。
+
+同样，阻塞式Message Writer(一个将数据写入流中组件)也从不用处理只有部分数据被写入和写入消息要延迟恢复的情况。
+
+- Blocking IO Pipelines Drawbacks（阻塞IO通道的缺陷）
+
+虽然阻塞式Message Reader容易实现，但是也有一个不幸的缺点：每一个要分解成消息的流都需要一个独立的线程。必须要这样做的理由是每一个流的IO接口会阻塞，直到它有数据读取。这就意味着一个单独的线程是无法尝试从一个没有数据的流中读取数据转去读另一个流。一旦一个线程尝试从一个流中读取数据，那么这个线程将会阻塞直到有数据可以读取。
+
+如果IO管道是必须要处理大量并发链接服务器的一部分的话，那么服务器就需要为每一个链接维护一个线程。对于任何时间都只有几百条并发链接的服务器这确实不是什么问题。但是如果服务器拥有百万级别的并发链接量，这种设计方式就没有良好收放。每个线程都会占用栈32bit-64bit的内存。所以一百万个线程占用的内存将会达到1TB！不过在此之前服务器将会把所有的内存用以处理传经来的消息（例如：分配给消息处理期间使用对象的内存）
+
+为了将线程数量降下来，许多服务器使用了服务器维持线程池（例如：常用线程为100）的设计，从而一次一个地从入站链接（inbound connections）地读取。入站链接保存在一个队列中，线程按照进入队列的顺序处理入站链接。这一设计如下图所示：(译者注：Tomcat就是这样的)
+
+non-blocking-server-3.png
+
+然而，这一设计需要入站链接合理地发送数据。如果入站链接长时间不活跃，那么大量的不活跃链接实际上就造成了线程池中所有线程阻塞。这意味着服务器响应变慢甚至是没有反应。 
+
+一些服务器尝试通过弹性控制线程池的核心线程数量这一设计减轻这一问题。例如，如果线程池线程不足时，线程池可能开启更多的线程处理请求。这一方案意味着需要大量的长时链接才能使服务器不响应。但是记住，对于并发线程数任然是有一个上限的。因此，这一方案仍然无法很好地解决一百万个长时链接。
+
+#### Basic Non-blocking IO Pipeline Design（基础非阻塞IO管道设计）
+
+
+
+#### Reading Partial Messages
+
+#### Storing Partial Messages
+
+- A Buffer Per Message Reader
+- Resizable Buffers
+- Resize by Copy
+- Resize by Append
+- TLV Encoded Messages
+
+#### Writing Partial Messages
+
+#### Putting it All Together
+
+#### Server Thread Model
+
