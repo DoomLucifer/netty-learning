@@ -681,21 +681,301 @@ non-blocking-server-3.png
 
 #### Basic Non-blocking IO Pipeline Design（基础非阻塞IO管道设计）
 
+一个非阻塞式IO管道可以使用一个单独的线程向多个流读取数据。这需要流可以被切换到非阻塞模式。在非阻塞模式下，当你读取流信息时可能会返回0个字节或更多字节的信息。如果流中没有数据可读就返回0字节，如果流中有数据可读就返回1+字节。
+
+为了避免检查没有可读数据的流我们可以使用 Java NIO Selector. 一个或多个SelectableChannel 实例可以同时被一个Selector注册.。当你调用Selector的select()或者 selectNow() 方法它只会返回有数据读取的SelectableChannel的实例. 下图是该设计的示意图：
+
+non-blocking-server-4.png
+
+#### Reading Partial Messages（读取部分消息）
+
+当我们从一个SelectableChannel读取一个数据包时，我们不知道这个数据包相比于源文件是否有丢失或者重复数据（原文是：When we read a block of data from a SelectableChannel we do not know if that data block contains less or more than a message）。一个数据包可能的情况有：缺失数据（比原有消息的数据少）、与原有一致、比原来的消息的数据更多（例如：是原来的1.5或者2.5倍）。数据包可能出现的情况如下图所示：
+
+non-blocking-server-5.png
+
+处理这种部分消息时有两个难点：
+
+1. 检测数据块中是否有完整的消息
+2. 在其余消息达到之前如何处理
+
+判断消息的完整性需要消息读取器（Message Reader）在数据包中寻找是否存在至少一个完整消息体的数据。如果一个数据包包含一个或多个完整消息体，这些消息就能够被发送到管道进行处理。寻找完整消息体这一处理可能会重复多次，因此这一操作应该尽可能的快。
+
+判断消息完整性和存储部分消息都是消息读取器(Message Reader)的责任。为了避免混合来自不同Channel的消息，我们将对每一个Channel使用一个Message Reader。设计如下图所示:
+
+non-blocking-server-6.png
+
+在从Selector得到可从中读取数据的Channel实例之后, 与该Channel相关联的Message Reader读取数据并尝试将他们分解为消息。这样读出的任何完整消息可以被传到读取通道(read pipeline)任何需要处理这些消息的组件中。
+
+一个Message Reader一定满足特定的协议。Message Reader需要知道它尝试读取的消息的消息格式。如果我们的服务器可以通过协议来复用，那它需要有能够插入Message Reader实现的功能 – 可能通过接收一个Message Reader工厂作为配置参数。
+
+#### Storing Partial Messages（存储部分消息）
+
+存储部分消息是Message Reader的责任，直到消息读取器接受到完整的消息，我们需要考虑部分消息存储怎么来实现
+
+有两点需要考虑：
+
+1. 尽可能少的复制消息数据。复制越多，性能越低
+2. 我们希望将完整的消息存储在连续的字节序列中，使解析消息更容易
+
+- A Buffer Per Message Reader（每个Message Reader的缓冲区）
+
+很显然部分消息需要存储某些缓冲区中。简单的实现方式可以是每一个Message Reader内部简单地有一个缓冲区。但是这个缓冲区应该多大？它要大到足够储存最大允许储存消息。因此，如果最大允许储存消息是1MB，那么Message Reader内部缓冲区将至少需要1MB。
+
+当我们的链接达到百万数量级，每个链接都使用1MB并没有什么作用。1,000,000 * 1MB仍然是1TB的内存！那如果最大的消息是16MB甚至是128MB呢？
+
+- Resizable Buffers（大小可调的缓冲区）
+
+另一个选择是在Message Reader内部实现一个大小可调的缓冲区。大小可调的缓冲区开始的时候很小，如果它获取的消息过大，那缓冲区会扩大。这样每一条链接就不一定需要如1MB的缓冲区。每条链接的缓冲区只要需要足够储存下一条消息的内存就行了。
+
+有几个可实现可调大小缓冲区的方法。它们都各自有自己的优缺点，所以接下来的部分我将逐个讨论。
+
+- Resize by Copy（通过复制调整大小）
+
+实现可调大小缓冲区的第一种方式是从一个大小(例如:4KB)的缓冲区开始。如果4KB的缓冲区装不下一个消息，则会分配一个更大的缓冲区(如:8KB),并将大小为4KB的缓冲区数据复制到这个更大的缓冲区中去。
+
+通过复制实现大小可调缓冲区的优点在于消息的所有数据被保存在一个连续的字节数组中，这就使得消息的解析更加容易。它的缺点就是在复制更大消息的时候会导致大量的数据。
 
 
-#### Reading Partial Messages
 
-#### Storing Partial Messages
+为了减少消息的复制，你可以分析流进你系统的消息的大小，并找出尽量减少复制量的缓冲区的大小。例如，你可能看到大多数消息都小于4KB，这是因为它们都仅包含很小的 request/responses。这意味着缓冲区的初始值应该设为4KB。
 
-- A Buffer Per Message Reader
-- Resizable Buffers
-- Resize by Copy
-- Resize by Append
-- TLV Encoded Messages
+然后你可能有一个消息大于4KB，这通常是因为它里面包含一个文件。你可能注意到大多数流进系统的文件都是小于128KB的。这样第二个缓冲区的大小设置为128KB就较为合理。
 
-#### Writing Partial Messages
+最后你可能会发现一旦消息超过128KB之后，消息的大小就没有什么固定的模式，因此缓冲区最终的大小可能就是最大消息的大小。
 
-#### Putting it All Together
+根据流经系统的消息大小，上面三种缓冲区大小可以减少数据的复制。小于4KB的消息将不会复制。对于一百万个并发链接其结果是：1,000,000 * 4KB = 4GB，对于目前大多数服务器还是有可能的。介于4KB – 128KB的消息将只会复制一次，并且只有4KB的数据复制进128KB的缓冲区中。介于128KB至最大消息大小的消息将会复制两次。第一次复制4KB，第二次复制128KB，所以最大的消息总共复制了132KB。假设没有那么多超过128KB大小的消息那还是可以接受的。
 
-#### Server Thread Model
+一旦消息处理完毕，那么分配的内存将会被清空。这样在同一链接接收到的下一条消息将会再次从最小缓冲区大小开始算。这样做的必要性是确保了不同连接间内存的有效共享。所有的连接很有可能在同一时间并不需要打的缓冲区。
+
+我有一篇介绍如何实现这样支持可调整大小的数组的内存缓冲区的完整文章:
+
+[**Resizable Arrays**](http://tutorials.jenkov.com/java-performance/resizable-array.html)
+
+文章包含一个GitHub仓库连接，其中的代码演示了是如何实现的。
+
+- Resize by Append（通过追加调整大小）
+
+调整缓冲区大小的另一种方法是使缓冲区由多个数组组成。当你需要调整缓冲区大小时，你只需要另一个字节数组并将数据写进去就行了。
+
+这里有两种方法扩张一个缓冲区。一个方法是分配单独的字节数组，并将这些数组保存在一个列表中。另一个方法是分配较大的共享字节数组的片段，然后保留分配给缓冲区的片段的列表。就个人而言，我觉得片段的方式会好些，但是差别不大。
+
+通过追加单独的数组或片段来扩展缓冲区的优点在于写入过程中不需要复制数据。所有的数据可以直接从socket (Channel)复制到一个数组或片段中。
+
+以这种方式扩展缓冲区的缺点是在于数据不是存储在单独且连续的数组中。这将使得消息的解析更困难，因为解析器需要同时查找每个单独数组的结尾处和所有数组的结尾处。由于你需要在写入的数据中查找消息的结尾，所以该模型并不容易使用。
+
+- TLV Encoded Messages（TLV编码消息）
+
+一些协议消息格式是使用TLV格式（类型(Type)、长度(Length)、值(Value)）编码。这意味着当消息到达时，消息的总长度被存储在消息的开头。这一方式你可以立即知道应该对整个消息分配多大的内存。
+
+TLV编码使得内存管理变得更加容易。你可以立即知道要分配多大的内存给这个消息。只有部分在结束时使用的缓冲区才会使得内存浪费。
+
+TLV编码的一个缺点是你要在消息的所有数据到达之前就分配好这个消息需要的所有内存。一些慢连接可能因此分配完你所有可用内存，从而使得你的服务器无法响应。
+
+此问题的解决方法是使用包含多个TLV字段的消息格式。因此，服务器是为每个字段分配内存而不是为整个消息分配内存，并且是字段到达之后再分配内存。然而，一个大消息中的一个大字段在你的内存管理有同样的影响。
+
+另外一个方案就是对于还未到达的信息设置超时时间，例如10-15秒。当恰好有许多大消息到达服务器时，这个方案能够使得你的服务器可以恢复，但是仍然会造成服务器一段时间无法响应。另外，恶意的DoS（Denial of Service拒绝服务）攻击仍然可以分配完你服务器的所有内存。
+
+TLV编码存在许多不同的形式。实际使用的字节数、自定字段的类型和长度都依赖于每一个TLV编码。TLV编码首先放置字段的长度、然后是类型、然后是值（一个LTV编码）。 虽然字段的顺序不同，但它仍然是TLV的一种。
+
+TLV编码使内存管理更容易这一事实，其实是HTTP 1.1是如此可怕的协议的原因之一。 这是他们试图在HTTP 2.0中修复数据的问题之一，数据在LTV编码帧中传输。 这也是为什么我们使用TLV编码的VStack.co project 设计了我们自己的网络协议。
+
+#### Writing Partial Messages（写部分数据）
+
+在非阻塞IO管道中写数据仍然是一个挑战。当你调用一个处于非阻塞式Channel对象的write(ByteBuffer)方法时，ByteBuffer写入多少数据是无法保证的。write（ByteBuffer）方法会返回写入的字节数，因此可以跟踪写入的字节数。这就是挑战：跟踪部分写入的消息，以便最终可以发送一条消息的所有字节。
+
+为了管理部分消息写入Channel，我们将创建一个消息写入器（Message Writer）。就像Message Reader一样，每一个要写入消息的Channel我们都需要一个Message Writer。在每个Message Writer中，我们跟踪正在写入的消息的字节数。
+
+
+
+如果达到的消息量超过Message Writer可直接写入Channel的消息量，消息就需要在Message Writer排队。然后Message Writer尽快地将消息写入到Channel中。
+
+下图是部分消息如何写入的设计图：
+
+non-blocking-server-8.png
+
+为了使Message Writer能够尽快发送数据，Message Writer需要能够不时被调用，这样就能发送更多的消息。
+
+如果你又大量的连接那你将需要大量的Message Writer实例。检查Message Writer实例(如:一百万个)看写任何数据时是否缓慢。 首先，许多Message Writer实例都没有任何消息要发送，我们并不想检查那些Message Writer实例。其次，并不是所有的Channel实例都可以准备好写入数据。 我们不想浪费时间尝试将数据写入无法接受任何数据的Channel。
+
+为了检查Channel是否准备好进行写入，您可以使用Selector注册Channel。然而我们并不想将所有的Channel实例注册到Selector中去。想象一下，如果你有1,000,000个连接且其中大多是空闲的，并且所有的连接已经与Selector注册。然后当你调用select()时，这些Channel实例的大部分将被写入就绪（它们大都是空闲的，记得吗？）然后你必须检查所有这些连接的Message Writer，以查看他们是否有任何数据要写入。
+
+为了避免检查所有消息的Message Writer实例和所有不可能被写入任何信息的Channel实例，我们使用这两步的方法：
+
+1. 当一个消息被写入Message Writer，Message Writer向Selector注册其相关Channel（如果尚未注册）
+2. 当服务器有时间时，检查Selector以查看哪些注册的Channel实例已准备好写入。对于每个写就绪Channel，请求器关联的Message Writer将数据写入Channel。如果Message Writer将其所有消息写入其Channel，则Channel将再次从Selector注册。
+
+这两个小步骤确保了有消息写入的Channel实际上已经被Selector注册了。
+
+#### Putting it All Together（汇总）
+
+正如你所见，一个非阻塞式服务器需要时不时检查输入的消息来判断是否有任何的新的完整的消息发送过来。服务器可能会在一个或多个完整消息发来之前就检查了多次。检查一次是不够的。
+
+同样，一个非阻塞式服务器需要时不时检查是否有任何数据需要写入。如果有，服务器需要检查是否有任何相应的连接准备好将该数据写入它们。只有在第一次排队消息时才检查是不够的，因为消息可能被部分写入。
+
+所有这些非阻塞服务器最终都需要定期执行的三个“管道”（pipelines）：
+
+- 读取管道（The Read Pipeline）：用于检查是否有新数据从开放连接进来
+- 处理管道（The Process Pipeline）：用于所有任何完整消息
+- 写入管道（The Write Pipeline）：用于检查是否可以将任何传出的消息写入任何打开的连接
+
+这三条管道在循环中重复执行。你可能可以稍微优化执行。例如，如果没有排队的消息可以跳过写入管道。 或者，如果我们没有收到新的，完整的消息，也许您可以跳过流程管道。
+
+以下是说明完整服务器循环的图：
+
+non-blocking-server-9.png
+
+如果仍然发现这有点复杂，请记住查看GitHub资料库：[**https://github.com/jjenkov/java-nio-server**](https://github.com/jjenkov/java-nio-server)
+
+也许看到正在执行的代码可能会帮助你了解如何实现这一点。
+
+#### Server Thread Model（服务器线程模型）
+
+GitHub资源库里面的非阻塞式服务器实现使用了两个线程的线程模式。第一个线程用来接收来自ServerSocketChannel的传入连接。第二个线程处理接受的连接，意思是读取消息，处理消息并将响应写回连接。这两个线程模型的图解如下：
+
+non-blocking-server-10.png
+
+上一节中说到的服务器循环处理是由处理线程（Processor Thread）执行。
+
+### Java NIO DatagramChannel
+
+Java NIO中的DatagramChannel是一个能收发UDP包的通道。因为UDP是无连接的网络协议，所以不能像其它通道那样读取和写入。它发送和接收的是数据包。
+
+#### Opening a DatagramChannel（打开DatagramChannel）
+
+下面是 DatagramChannel 的打开方式：
+
+```java
+DatagramChannel channel = DatagramChannel.open();
+channel.socket().bind(new InetSocketAddress(9999));
+```
+
+这个例子打开的 DatagramChannel可以在UDP端口9999上接收数据包。
+
+#### Receiving Data（接收数据）
+
+通过receive()方法从DatagramChannel接收数据，如：
+
+```java
+ByteBuffer buf = ByteBuffer.allocate(48);
+buf.clear();
+
+channel.receive(buf);
+```
+
+receive()方法会将接收到的数据包内容复制到指定的Buffer. 如果Buffer容不下收到的数据，多出的数据将被丢弃。
+
+#### Sending Data（发送数据）
+
+通过send()方法从DatagramChannel发送数据，如:
+
+```java
+String newData = "New String to write to file..." + System.currentTimeMillis();
+ByteBuffer buf = ByteBuffer.allocate(48);
+buf.clear();
+buf.put(newData.getBytes());
+buf.flip();
+
+int bytesSent = channel.send(buf,new InetSocketAddress("jenkov.com",80));
+```
+
+这个例子发送一串字符到”jenkov.com”服务器的UDP端口80。 因为服务端并没有监控这个端口，所以什么也不会发生。也不会通知你发出的数据包是否已收到，因为UDP在数据传送方面没有任何保证。
+
+#### Connecting to a Specific Address（连接到指定地址）
+
+可以将DatagramChannel“连接”到网络中的特定地址的。由于UDP是无连接的，连接到特定地址并不会像TCP通道那样创建一个真正的连接。而是锁住DatagramChannel ，让其只能从特定地址收发数据。
+
+这里有个例子:
+
+```java
+channel.connect(new InetSocketAddress("jenkov.com",80));
+```
+
+当连接后，也可以使用read()和write()方法，就像在用传统的通道一样。只是在数据传送方面没有任何保证。这里有几个例子：
+
+```java
+int bytesRead = channel.read(buf);
+int bytesWritten = channel.write(buf);
+```
+
+### Java NIO Pipe
+
+Java NIO 管道是2个线程之间的单向数据连接。`Pipe`有一个source通道和一个sink通道。数据会被写到sink通道，从source通道读取。
+
+这里是Pipe原理的图示：
+
+pipe-internals.png
+
+#### Creating a Pipe（打开管道）
+
+调用Pipe.open()方法打开一个管道，例如：
+
+```java
+Pipe pipe = Pipe.open();
+```
+
+#### Writing to a Pipe（向管道写数据）
+
+要向管道写数据，需要访问sink通道。像这样：
+
+```java
+Pipe.SinkChannel sinkChannel = pipe.sink();
+```
+
+通过调用SinkChannel的`write()`方法，将数据写入`SinkChannel`,像这样：
+
+```java
+String newData = "New String to write to file..." + System.currentTimeMillis();
+ByteBuffer buf = ByteBuffer.allocate(48);
+buf.clear();
+buf.put(newData.getBytes());
+buf.flip();
+
+while(buf.hasRemaining()){
+    sinkChannel.write(buf);
+}
+```
+
+#### Reading from a Pipe（从管道读数据）
+
+从读取管道的数据，需要访问source通道，像这样：
+
+```java
+Pipe.SourceChannel sourceChannel = pipe.source();
+```
+
+调用source通道的`read()`方法来读取数据，像这样：
+
+```java
+ByteBuffer buf = ByteBuffer.allocate(48);
+int bytesRead = sourceChannel.read(buf);
+```
+
+`read()`方法返回的int值会告诉我们多少字节被读进了缓冲区。
+
+### Java NIO vs IO
+
+#### Main Difference Between Java NIO and IO
+
+下表总结了Java NIO和IO之间的主要差别，我会更详细地描述表中每部分的差异。
+
+| IO              | NIO             |
+| :-------------- | :-------------- |
+| Stream oriented | Buffer oriented |
+| Blocking IO     | Non blocking IO |
+|                 | Selectors       |
+
+#### Stream Oriented vs Buffer Oriented（面向流vs面向缓冲区）
+
+
+
+#### Blocking vs Non-blocking IO
+
+#### Selectors
+
+#### How NIO and IO Influences Application Design
+
+- The API Calls
+- The Processing of Data
+
+#### Summary
 
