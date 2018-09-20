@@ -966,16 +966,547 @@ int bytesRead = sourceChannel.read(buf);
 
 #### Stream Oriented vs Buffer Oriented（面向流vs面向缓冲区）
 
-
+Java NIO和IO之间第一个最大的区别是，IO是面向流的，NIO是面向缓冲区的。 Java IO面向流意味着每次从流中读一个或多个字节，直至读取所有字节，它们没有被缓存在任何地方。此外，它不能前后移动流中的数据。如果需要前后移动从流中读取的数据，需要先将它缓存到一个缓冲区。 Java NIO的缓冲导向方法略有不同。数据读取到一个它稍后处理的缓冲区，需要时可在缓冲区中前后移动。这就增加了处理过程中的灵活性。但是，还需要检查是否该缓冲区中包含所有您需要处理的数据。而且，需确保当更多的数据读入缓冲区时，不要覆盖缓冲区里尚未处理的数据。
 
 #### Blocking vs Non-blocking IO
 
+Java IO的各种流是阻塞的。这意味着，当一个线程调用read() 或 write()时，该线程被阻塞，直到有一些数据被读取，或数据完全写入。该线程在此期间不能再干任何事情了。 Java NIO的非阻塞模式，使一个线程从某通道发送请求读取数据，但是它仅能得到目前可用的数据，如果目前没有数据可用时，就什么都不会获取。而不是保持线程阻塞，所以直至数据变的可以读取之前，该线程可以继续做其他的事情。 非阻塞写也是如此。一个线程请求写入一些数据到某通道，但不需要等待它完全写入，这个线程同时可以去做别的事情。 线程通常将非阻塞IO的空闲时间用于在其它通道上执行IO操作，所以一个单独的线程现在可以管理多个输入和输出通道（channel）。
+
 #### Selectors
+
+Java NIO的选择器允许一个单独的线程来监视多个输入通道，你可以注册多个通道使用一个选择器，然后使用一个单独的线程来“选择”通道：这些通道里已经有可以处理的输入，或者选择已准备写入的通道。这种选择机制，使得一个单独的线程很容易来管理多个通道。
 
 #### How NIO and IO Influences Application Design
 
-- The API Calls
-- The Processing of Data
+- NIO或者IO API的调用
+- 数据的处理
+- 用于处理数据的线程数量
 
-#### Summary
+##### API调用
+
+当然，使用NIO的API调用时看起来与使用IO时有所不同，但这并不意外，因为并不是仅从一个InputStream逐字节读取，而是数据必须先读入缓冲区再处理。
+
+##### 数据处理
+
+使用纯粹的NIO设计相较IO设计，数据处理也受到影响。
+
+在IO设计中，我们从InputStream或 Reader逐字节读取数据。假设你正在处理一基于行的文本数据流，例如：
+
+```xml
+Name:Anna
+Age:25
+Email:anna@mailserver.com
+Phone:1234567890
+```
+
+IO流的处理方式如下：
+
+```java
+InputStream input = ... ; // get the InputStream from the client socket
+
+BufferedReader reader = new BufferedReader(new InputStreamReader(input));
+
+String nameLine   = reader.readLine();
+String ageLine    = reader.readLine();
+String emailLine  = reader.readLine();
+String phoneLine  = reader.readLine();
+```
+
+请注意处理状态由程序执行多久决定。换句话说，一旦reader.readLine()方法返回，你就知道肯定文本行就已读完， readline()阻塞直到整行读完，这就是原因。你也知道此行包含名称；同样，第二个readline()调用返回的时候，你知道这行包含年龄等。 正如你可以看到，该处理程序仅在有新数据读入时运行，并知道每步的数据是什么。一旦正在运行的线程已处理过读入的某些数据，该线程不会再回退数据（大多如此）。下图也说明了这条原则：
+
+nio-vs-io-1.png
+
+而一个NIO的实现会有所不同，下面是一个简单的例子：
+
+```java
+ByteBuffer buffer = ByteBuffer.allocate(48);
+int bytesRead = inChannel.read(buffer);
+```
+
+注意第二行，从通道读取字节到ByteBuffer。当这个方法调用返回时，你不知道你所需的所有数据是否在缓冲区内。你所知道的是，该缓冲区包含一些字节，这使得处理有点困难。
+假设第一次 read(buffer)调用后，读入缓冲区的数据只有半行，例如，“Name:An”，你能处理数据吗？显然不能，需要等待，直到整行数据读入缓存，在此之前，对数据的任何处理毫无意义。
+
+所以，你怎么知道是否该缓冲区包含足够的数据可以处理呢？好了，你不知道。发现的方法只能查看缓冲区中的数据。其结果是，在你知道所有数据都在缓冲区里之前，你必须检查几次缓冲区的数据。这不仅效率低下，而且可以使程序设计方案杂乱不堪。例如：
+
+```java
+ByteBuffer buffer = ByteBuffer.allocate(48);
+int bytesRead = inChannel.read(buffer);
+while(!bufferFull(bytesRead)){
+    bytesRead = inChannel.read(buffer);
+}
+```
+
+bufferFull()方法必须跟踪有多少数据读入缓冲区，并返回真或假，这取决于缓冲区是否已满。换句话说，如果缓冲区准备好被处理，那么表示缓冲区满了。
+
+bufferFull()方法扫描缓冲区，但必须保持在bufferFull（）方法被调用之前状态相同。如果没有，下一个读入缓冲区的数据可能无法读到正确的位置。这是不可能的，但却是需要注意的又一问题。
+
+如果缓冲区已满，它可以被处理。如果它不满，并且在你的实际案例中有意义，你或许能处理其中的部分数据。但是许多情况下并非如此。下图展示了“缓冲区数据循环就绪”：
+
+nio-vs-io-2.png
+
+##### 用来处理数据的线程数
+
+NIO可让您只使用一个（或几个）单线程管理多个通道（网络连接或文件），但付出的代价是解析数据可能会比从一个阻塞流中读取数据更复杂。
+
+如果需要管理同时打开的成千上万个连接，这些连接每次只是发送少量的数据，例如聊天服务器，实现NIO的服务器可能是一个优势。同样，如果你需要维持许多打开的连接到其他计算机上，如P2P网络中，使用一个单独的线程来管理你所有出站连接，可能是一个优势。一个线程多个连接的设计方案如下图所示：
+
+nio-vs-io-3.png
+
+如果你有少量的连接使用非常高的带宽，一次发送大量的数据，也许典型的IO服务器实现可能非常契合。下图说明了一个典型的IO服务器设计：
+
+nio-vs-io-4.png
+
+### Java NIO Path
+
+Java Path接口是java NIO 2中更新的一部分，在java 6和java 7中都有体现，在java 7中Java Path接口被加入到了Java NIO中。Path接口位于java.nio.file包中，因此java Path接口的全限定名为java.nio.file.Path
+
+Java Path实例表示文件系统中的一个路径，改路径既能指向目录也能指向文件。路径可以是绝对的也可以是相对的。绝对路径包含从文件系统根目录到其指向的文件或目录的完整路径。相对路径包含相对于其他路径的一个文件或者目录的路径。
+
+不用困惑一些操作系统里的文件系统路径和path环境变量，他们之间没有任何关系。java.nio.file.Path接口在某些方面与java.io.File类非常相似，但是他们有细微的差别。甚至许多情况下我们可以用Path接口替换File类。
+
+#### Creating a Path Instance（创建Path实例）
+
+通过使用Paths类的静态方法Paths.get()创建实例，例子如下：
+
+```java
+import java.nio.file.Path
+import java.nio.file.Paths
+
+public class PathExample{
+    public static void main(String[] args){
+		Path path = Paths.get("c:\\data\\myfile.txt");
+    }
+}
+```
+
+注意例子顶部的两个import语句，使用Path接口和Paths类前首先需要导入他们。
+
+其次，注意Paths.get("c:\\data\\myfile.txt")方法的调用，调用Paths.get()方法创建Path实例，也就是说Paths.get()方法是一个用来产生Path实例的工厂方法
+
+- Creating an Absolute Path （创建绝对路径）
+
+调用Paths.get()工厂方法并带上绝对路径作为参数来创建一个绝对路径Path实例，例子如下：
+
+```java
+Path path = Paths.get("c:\\data\\myfile.txt");
+```
+
+绝对路径是c:\data\myfile.txt。两个反斜杠字符是必须的在java字符串里，第一个反斜杠是转义字符，接下来的反斜杠才表示真正的路径。通过写两个反斜杠来告诉java编译器去实现字符串里的一个反斜杠。
+
+以上的路径是Windows文件系统路径，在Unix（Linux，MacOS，FreeBSD etc）系统里上面的路径表示形式如下：
+
+```java
+Path path = Paths.get("/home/jakobjenkov/myfile.txt");
+```
+
+绝对路径是/home/jakobjenkov/myfile.txt
+
+如果使用这种路径在windows系统上，该路径将被解析成基于当前驱动的相对路径，上面的路径将被解析成C:/home/jakobjenkov/myfile.txt
+
+- Creating a Relative Path（创建相对路径）
+
+相对路径是一个基于基础路径的一个目录或文件的路径，相对路径的完整路径是结合基础路径的一个相对路径
+
+通过Paths.get(basePath,relativePath)方法来创建相对路径Path实例，如：
+
+```java
+Path projects = Paths.get("d:\\data","projects");
+Path file = Paths.get("d:\\data","projects\\a-project\\myfile.txt")
+```
+
+第一个例子创建了一个指向d:\data\projects的Path实例。第二个例子创建了一个指向d:\data\projects\a-project\myfile.txt的Path实例
+
+当使用相对路径时，可以在字符串中使用两种特别的编码方式
+
+- .
+- ..
+
+.表示当前目录，..表示父目录
+
+#### Path.normalize()
+
+Path接口的normalize()方法能够正常化一个路径，正常化意味着能够移除路径中.和..编码形式，如：
+
+```java
+String originalPath =
+        "d:\\data\\projects\\a-project\\..\\another-project";
+
+Path path1 = Paths.get(originalPath);
+System.out.println("path1 = " + path1);
+
+Path path2 = path1.normalize();
+System.out.println("path2 = " + path2);
+
+//结果
+path1 = d:\data\projects\a-project\..\another-project
+path2 = d:\data\projects\another-project
+```
+
+### Java NIO Files
+
+#### Files.exists()
+
+Files.exists()方法检测一个给定的Path是否在文件系统中存在
+
+Path实例可能指向文件系统中不存在的路径
+
+```java
+Path path = Paths.get("data/logging.properties");
+
+boolean pathExists =
+        Files.exists(path,
+            new LinkOption[]{ LinkOption.NOFOLLOW_LINKS});
+```
+
+注意一下Files.exists()方法的第二个参数，该参数是一个Options数组，影响Files.exists()如何确定路径是否存在。
+
+在上面的示例中，数组包含LinkOption.NOFOLLOW_LINKS，这意味着Files.exists（）方法不应遵循文件系统中的符号链接来确定路径是否存在。
+
+#### Files.createDirectory()
+
+Files.createDirectory()方法根据Path实例创建目录，如：
+
+```java
+Path path = Paths.get("data/subdir");
+try{
+    Path newDir = Files.createDirectory(path);
+}catch(FileAlreadyExistsException e){
+    //the directory already exists
+}catch(IOException e){
+    //something else went wrong
+}
+```
+
+#### Files.copy()
+
+Files.copy()方法用来在两个路径之间拷贝文件，如：
+
+```java
+Path sourcePath      = Paths.get("data/logging.properties");
+Path destinationPath = Paths.get("data/logging-copy.properties");
+
+try {
+    Files.copy(sourcePath, destinationPath);
+} catch(FileAlreadyExistsException e) {
+    //destination file already exists
+} catch (IOException e) {
+    //something else went wrong
+    e.printStackTrace();
+}
+```
+
+- Overwriting Existing Files
+
+Files.copy()方法可以强制覆盖掉已经存在的文件，例子如下：
+
+```java
+Path sourcePath      = Paths.get("data/logging.properties");
+Path destinationPath = Paths.get("data/logging-copy.properties");
+
+try {
+    Files.copy(sourcePath, destinationPath,
+            StandardCopyOption.REPLACE_EXISTING);
+} catch(FileAlreadyExistsException e) {
+    //destination file already exists
+} catch (IOException e) {
+    //something else went wrong
+    e.printStackTrace();
+}
+```
+
+#### Files.move()
+
+Files.move()方法既能移动文件又能同时更改文件的名字
+
+```java
+Path sourcePath      = Paths.get("data/logging-copy.properties");
+Path destinationPath = Paths.get("data/subdir/logging-moved.properties");
+
+try {
+    Files.move(sourcePath, destinationPath,
+            StandardCopyOption.REPLACE_EXISTING);
+} catch (IOException e) {
+    //moving file failed.
+    e.printStackTrace();
+}
+```
+
+#### Files.delete()
+
+#### Files.walkFileTree()
+
+该方法用于递归(recursively)遍历(traverse)目录树，walkFileTree()方法需要一个Path实例和一个FileVisitor作为参数。
+
+FileVisitor的接口如下：
+
+```java
+public interface FileVisitor {
+
+    public FileVisitResult preVisitDirectory(
+        Path dir, BasicFileAttributes attrs) throws IOException;
+
+    public FileVisitResult visitFile(
+        Path file, BasicFileAttributes attrs) throws IOException;
+
+    public FileVisitResult visitFileFailed(
+        Path file, IOException exc) throws IOException;
+
+    public FileVisitResult postVisitDirectory(
+        Path dir, IOException exc) throws IOException {
+
+}
+```
+
+需要自己实现FileVisitor接口，然后把实现传递给walkFileTree()方法。在目录遍历期间，将在不同时间调用FileVisitor实现的每个方法。如果您不需要挂钩所有这些方法，则可以扩展SimpleFileVisitor类，该类包含FileVisitor接口中所有方法的默认实现。
+
+walkFileTree()例子：
+
+```java
+Files.walkFileTree(path, new FileVisitor<Path>() {
+  @Override
+  public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
+    System.out.println("pre visit dir:" + dir);
+    return FileVisitResult.CONTINUE;
+  }
+
+  @Override
+  public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+    System.out.println("visit file: " + file);
+    return FileVisitResult.CONTINUE;
+  }
+
+  @Override
+  public FileVisitResult visitFileFailed(Path file, IOException exc) throws IOException {
+    System.out.println("visit file failed: " + file);
+    return FileVisitResult.CONTINUE;
+  }
+
+  @Override
+  public FileVisitResult postVisitDirectory(Path dir, IOException exc) throws IOException {
+    System.out.println("post visit directory: " + dir);
+    return FileVisitResult.CONTINUE;
+  }
+});
+```
+
+preVisitDirectory()方法在访问目录之前调用。postVisitDirectory()方法在访问目录之后被调用。
+
+visitFile()方法在每个文件被访问的时候调用，该方法只有遍历文件时调用，遍历目录时不会调用。visitFileFailed()方法在文件访问失败时被调用，比如没有文件的访问权限，或者其他的什么错误。
+
+这四个方法返回一个FileVisitResult枚举实例，枚举包含以下4中选项：
+
+- continue
+- terminate
+- Skip_siblings
+- Skip_subtree
+
+通过返回其中一个值，被调用的方法可以决定文件遍历应该如何继续.
+
+continue表示文件遍历正常
+
+terminate表示文件遍历立刻终止
+
+skip_siblings表示文件遍历继续但是将不会再访问该文件或者目录的同层级文件或目录
+
+Skip_subtree表示文件遍历继续但是不会访问目录下面的子文件或目录
+
+- Searching For Files
+
+```java
+Path rootPath = Paths.get("data");
+String fileToFind = File.separator + "README.txt";
+
+try {
+  Files.walkFileTree(rootPath, new SimpleFileVisitor<Path>() {
+    
+    @Override
+    public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+      String fileString = file.toAbsolutePath().toString();
+      //System.out.println("pathString = " + fileString);
+
+      if(fileString.endsWith(fileToFind)){
+        System.out.println("file found at path: " + file.toAbsolutePath());
+        return FileVisitResult.TERMINATE;
+      }
+      return FileVisitResult.CONTINUE;
+    }
+  });
+} catch(IOException e){
+    e.printStackTrace();
+}
+```
+
+- Deleting Directories Recursively
+
+Files.walkFileTree()方法也可用来递归删除一个目录下的子目录和所有文件。Files.delete（）方法只会删除目录为空的目录。通过浏览所有目录并删除每个目录中的所有文件（在visitFile（）内部，然后删除目录本身（在postVisitDirectory（）内），您可以删除包含所有子目录和文件的目录。例子如下：
+
+```java
+Path rootPath = Paths.get("data/to-delete");
+
+try {
+  Files.walkFileTree(rootPath, new SimpleFileVisitor<Path>() {
+    @Override
+    public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+      System.out.println("delete file: " + file.toString());
+      Files.delete(file);
+      return FileVisitResult.CONTINUE;
+    }
+
+    @Override
+    public FileVisitResult postVisitDirectory(Path dir, IOException exc) throws IOException {
+      Files.delete(dir);
+      System.out.println("delete dir: " + dir.toString());
+      return FileVisitResult.CONTINUE;
+    }
+  });
+} catch(IOException e){
+  e.printStackTrace();
+}
+```
+
+
+
+#### Additional Methods in the Files Class
+
+### Java NIO AsynchronousFileChannel
+
+在Java 7中 Java NIO加入了AsynchronousFileChannel，AsynchronousFileChannel能够异步的读写文件
+
+#### Creating an AsynchronousFileChannel
+
+```java
+Path path = Paths.get("data/test.xml");
+
+AsynchronousFileChannel fileChannel = AsynchronousFileChannel.open(path,StandardOpenOption.READ);
+```
+
+open（）方法的第一个参数是指向AsynchronousFileChannel要关联的文件的Path实例。
+
+第二个参数是一个或多个打开选项，它们告诉AsynchronousFileChannel对底层文件执行哪些操作。在这个例子中，我们使用了StandardOpenOption.READ，这意味着该文件将被打开以供阅读。
+
+#### Reading Data
+
+您可以通过两种方式从AsynchronousFileChannel读取数据。每种读取数据的方法都会调用AsynchronousFileChannel的read（）方法之一。以下各节将介绍这两种读取数据的方法。
+
+#### Reading Data Via a Future
+
+```java
+Future<Integer> operation = fileChannel.read(buffer,0);
+```
+
+这种read方法需要一个ByteBuffer作为参数，数据从AsynchronousFileChannel里读进ByteBuffer中。第二个参数表示开始读取字节的位置。
+
+read()方法会立即返回，即使读操作没有完成。您可以通过调用read（）方法返回的Future实例的isDone（）方法来检查读取操作何时完成。
+
+```java
+AsynchronousFileChannel fileChannel = AsynchronousFileChannel.open(path,StandardOpenOption.READ);
+ByteBuffer buffer = ByteBuffer.allocate(1024);
+long position = 0;
+
+Future<Integer> operation = fileChannel.read(buffer,position);
+
+while(!operation.isDone());
+
+buffer.flip();
+byte[] data = new byte[buffer.limit()];
+buffer.get(data);
+System.out.println(new String(data));
+buffer.clear();
+```
+
+#### Reading Data Via a CompletionHandler
+
+第二种读取数据的方式需要一个CompletionHandler作为参数
+
+```java
+fileChannel.read(buffer, position, buffer, new CompletionHandler<Integer, ByteBuffer>() {
+    @Override
+    public void completed(Integer result, ByteBuffer attachment) {
+        System.out.println("result = " + result);
+
+        attachment.flip();
+        byte[] data = new byte[attachment.limit()];
+        attachment.get(data);
+        System.out.println(new String(data));
+        attachment.clear();
+    }
+
+    @Override
+    public void failed(Throwable exc, ByteBuffer attachment) {
+
+    }
+});
+```
+
+数据一旦读完complete方法将会被调用，传递给completed（）方法的参数传递一个Integer，告诉读取了多少字节，以及传递给read（）方法的“attachment”。“attachment”是read（）方法的第三个参数。在这种情况下，也是ByteBuffer，数据也被读入其中。您可以自由选择要附加的对象。
+
+#### Writing Data
+
+写数据同样有两种方式
+
+#### Writing Data Via a Future
+
+```java
+Path path = Paths.get("data/test-write.txt");
+AsynchronousFileChannel fileChannel = 
+    AsynchronousFileChannel.open(path, StandardOpenOption.WRITE);
+
+ByteBuffer buffer = ByteBuffer.allocate(1024);
+long position = 0;
+
+buffer.put("test data".getBytes());
+buffer.flip();
+
+Future<Integer> operation = fileChannel.write(buffer, position);
+buffer.clear();
+
+while(!operation.isDone());
+
+System.out.println("Write done");
+```
+
+首先AsynchronousFileChannel设置到写模式。然后创建ByteBuffer并往里写入数据。然后将缓冲区中的数据写入file，最后检测返回的Future判断写入操作是否完成。
+
+注意：这个文件必须存在，如果文件不存在则会抛出java.nio.file.NoSuchFileException
+
+判断文件是否存在的代码如下:
+
+```java
+if(!Files.exists(path)){
+    Files.createFile(path);
+}
+```
+
+#### Writing Data Via a CompletionHandler
+
+```java
+Path path = Paths.get("data/test-write.txt");
+if(!Files.exists(path)){
+    Files.createFile(path);
+}
+AsynchronousFileChannel fileChannel = 
+    AsynchronousFileChannel.open(path, StandardOpenOption.WRITE);
+
+ByteBuffer buffer = ByteBuffer.allocate(1024);
+long position = 0;
+
+buffer.put("test data".getBytes());
+buffer.flip();
+
+fileChannel.write(buffer, position, buffer, new CompletionHandler<Integer, ByteBuffer>() {
+
+    @Override
+    public void completed(Integer result, ByteBuffer attachment) {
+        System.out.println("bytes written: " + result);
+    }
+
+    @Override
+    public void failed(Throwable exc, ByteBuffer attachment) {
+        System.out.println("Write failed");
+        exc.printStackTrace();
+    }
+});
+```
+
+
 
