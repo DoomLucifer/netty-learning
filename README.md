@@ -641,7 +641,7 @@ while(true){
 
 一个非阻塞式IO管道是由各个处理非阻塞式IO组件组成的链。其中包括读/写IO。下图就是一个简单的非阻塞式IO管道组成：
 
-non-blocking-server-1.png
+![non-blocking-server-1.png](https://raw.githubusercontent.com/DoomLucifer/netty-learning/master/images/non-blocking-server-1.png)
 
 一个组件使用 [**Selector**](http://tutorials.jenkov.com/java-nio/selectors.html) 监控 [**Channel**](http://tutorials.jenkov.com/java-nio/channels.html) 什么时候有可读数据。然后这个组件读取输入并且根据输入生成相应的输出。最后输出将会再次写入到一个Channel中。
 
