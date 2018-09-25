@@ -674,7 +674,7 @@ IO管道通常从流中读取数据（来自socket或者file）并且将这些�
 
 为了将线程数量降下来，许多服务器使用了服务器维持线程池（例如：常用线程为100）的设计，从而一次一个地从入站链接（inbound connections）地读取。入站链接保存在一个队列中，线程按照进入队列的顺序处理入站链接。这一设计如下图所示：(译者注：Tomcat就是这样的)
 
-non-blocking-server-3.png
+![non-blocking-server-3.png](https://raw.githubusercontent.com/DoomLucifer/netty-learning/master/images/non-blocking-server-3.png)
 
 然而，这一设计需要入站链接合理地发送数据。如果入站链接长时间不活跃，那么大量的不活跃链接实际上就造成了线程池中所有线程阻塞。这意味着服务器响应变慢甚至是没有反应。 
 
@@ -686,13 +686,13 @@ non-blocking-server-3.png
 
 为了避免检查没有可读数据的流我们可以使用 Java NIO Selector. 一个或多个SelectableChannel 实例可以同时被一个Selector注册.。当你调用Selector的select()或者 selectNow() 方法它只会返回有数据读取的SelectableChannel的实例. 下图是该设计的示意图：
 
-non-blocking-server-4.png
+![non-blocking-server-4.png](https://raw.githubusercontent.com/DoomLucifer/netty-learning/master/images/non-blocking-server-4.png)
 
 #### Reading Partial Messages（读取部分消息）
 
 当我们从一个SelectableChannel读取一个数据包时，我们不知道这个数据包相比于源文件是否有丢失或者重复数据（原文是：When we read a block of data from a SelectableChannel we do not know if that data block contains less or more than a message）。一个数据包可能的情况有：缺失数据（比原有消息的数据少）、与原有一致、比原来的消息的数据更多（例如：是原来的1.5或者2.5倍）。数据包可能出现的情况如下图所示：
 
-non-blocking-server-5.png
+![non-blocking-server-5.png](https://raw.githubusercontent.com/DoomLucifer/netty-learning/master/images/non-blocking-server-5.png)
 
 处理这种部分消息时有两个难点：
 
@@ -703,7 +703,7 @@ non-blocking-server-5.png
 
 判断消息完整性和存储部分消息都是消息读取器(Message Reader)的责任。为了避免混合来自不同Channel的消息，我们将对每一个Channel使用一个Message Reader。设计如下图所示:
 
-non-blocking-server-6.png
+![non-blocking-server-6.png](https://raw.githubusercontent.com/DoomLucifer/netty-learning/master/images/non-blocking-server-6.png)
 
 在从Selector得到可从中读取数据的Channel实例之后, 与该Channel相关联的Message Reader读取数据并尝试将他们分解为消息。这样读出的任何完整消息可以被传到读取通道(read pipeline)任何需要处理这些消息的组件中。
 
