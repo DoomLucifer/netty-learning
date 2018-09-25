@@ -226,7 +226,7 @@ fromChannel.transferTo(position, count, toChannel);
 
 > 为什么使用Selector？Selector单线程监听多个通道的好处是使用更少的线程，更少的线程带来的直接的好处就是减少线程上下文的切换，而线程的切换对于操作系统来说是一笔昂贵的开销，并且每个线程也会占用一定的内存资源，因此使用的线程越少越好。
 
-单线程Selector管理3个通道插图
+![Java NIO: A Thread uses a Selector to handle 3 Channel's](https://raw.githubusercontent.com/DoomLucifer/netty-learning/master/images/overview-selectors.png)
 
 - Creating a Selector
 
