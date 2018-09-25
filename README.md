@@ -657,7 +657,8 @@ while(true){
 
 非阻塞和阻塞IO管道两者之间最大的区别在于他们如何从底层Channel(Socket或者file)读取数据。
 
-IO管道通常从流中读取数据（来自socket或者file）并且将这些数据拆分为一系列连贯的消息。这和使用tokenizer（这里估计是解析器之类的意思）将数据流解析为token（这里应该是数据包的意思）类似。相反你只是将数据流分解为更大的消息体。我将拆分数据流成消息这一组件称为“消息读取器”（Message Reader）下面是Message Reader拆分流为消息的示意图：non-blocking-server-2.png
+IO管道通常从流中读取数据（来自socket或者file）并且将这些数据拆分为一系列连贯的消息。这和使用tokenizer（这里估计是解析器之类的意思）将数据流解析为token（这里应该是数据包的意思）类似。相反你只是将数据流分解为更大的消息体。我将拆分数据流成消息这一组件称为“消息读取器”（Message Reader）下面是Message Reader拆分流为消息的示意图：
+![non-blocking-server-2.png](https://raw.githubusercontent.com/DoomLucifer/netty-learning/master/images/non-blocking-server-2.png)
 
 一个阻塞IO管道可以使用类似InputStream的接口每次一个字节地从底层Channel读取数据，并且这个接口阻塞直到有数据可以读取。这就是阻塞式Message Reader的实现过程。
 
